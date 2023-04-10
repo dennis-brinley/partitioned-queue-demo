@@ -1,0 +1,74 @@
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: pq-demo
+# data:
+#   # property-like keys; each key maps to a simple value
+#   publisher_properties: "publisher.properties"
+#   consumer_properties: "consumer.properties"
+#   # file-like keys
+#   publisher.properties: |
+#     solace.messaging.transport.host=pq-pubsubplus.solace.svc.cluster.local:55554
+#     solace.messaging.service.vpn-name=default
+#     solace.messaging.authentication.basic.username=pq-user
+#     solace.messaging.authentication.basic.password=pqpass
+#     solace.messaging.transport.reconnection-attempts=20
+#     solace.messaging.transport.connection.retries-per-host=5
+#   consumer.properties: |
+#     host=pq-pubsubplus.solace.svc.cluster.local:55554
+#     vpn_name=default
+#     username=pq-user
+#     password=pqpass
+#     queue.name=partitioned-queue-1
+#     # Per second
+#     consume.msg.rate=10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: solace-consumer
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      containers:
+      - name: guaranteed-subscriber-1
+        image: guaranteed-subscriber:latest
+        resources:
+          limits:
+            cpu: "125m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        imagePullPolicy: Never
+      # - name: guaranteed-subscriber-2
+      #   image: guaranteed-subscriber:latest
+      #   resources:
+      #     limits:
+      #       cpu: "125m"
+      #       memory: "256Mi"
+      #     requests:
+      #       cpu: "100m"
+      #       memory: "128Mi"
+      #   imagePullPolicy: Never
+        # env:
+        # - name:  SOLACE_HOST
+        #   value: pq-pubsubplus.solace.svc.cluster.local:55554
+        # - name:  SOLACE_MSGVPN
+        #   value: default
+        # - name:  SOLACE_USER
+        #   value: pq-user
+        # - name:  SOLACE_PASSWORD
+        #   value: _SAMPLE_
+        # - name:  SOLACE_QUEUE
+        #   value: partitioned-queue-1
+        # - name:  CONSUME_MSG_RATE
+        #   value: '20'
+      restartPolicy: Always

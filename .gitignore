@@ -1,0 +1,9 @@
+.vscode/*
+*.jar
+*.log
+*.class
+.DS_Store
+target
+java/.classpath
+java/.project
+java/.settings
