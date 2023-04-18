@@ -31,18 +31,11 @@ import org.apache.logging.log4j.Logger;
 
 import com.solace.messaging.MessagingService;
 import com.solace.messaging.PubSubPlusClientException;
-import com.solace.messaging.config.SolaceProperties;
 import com.solace.messaging.config.profile.ConfigurationProfile;
 import com.solace.messaging.publisher.OutboundMessage;
 import com.solace.messaging.publisher.OutboundMessageBuilder;
 import com.solace.messaging.publisher.PersistentMessagePublisher;
 import com.solace.messaging.resources.Topic;
-import com.solace.messaging.util.SolaceSDTMap;
-import com.solacesystems.jcsmp.JCSMPFactory;
-import com.solacesystems.jcsmp.Message;
-import com.solacesystems.jcsmp.SDTException;
-import com.solacesystems.jcsmp.SDTMap;
-import com.solacesystems.jcsmp.TextMessage;
 import com.solacesystems.jcsmp.XMLMessage;
 
 /**
