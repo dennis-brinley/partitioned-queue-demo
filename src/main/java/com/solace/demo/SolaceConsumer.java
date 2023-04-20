@@ -16,7 +16,10 @@
 
 package com.solace.demo;
 
+import com.solacesystems.jcsmp.BytesXMLMessage;
 import com.solacesystems.jcsmp.ConsumerFlowProperties;
+import com.solacesystems.jcsmp.FlowEventArgs;
+import com.solacesystems.jcsmp.FlowEventHandler;
 import com.solacesystems.jcsmp.FlowReceiver;
 import com.solacesystems.jcsmp.JCSMPChannelProperties;
 import com.solacesystems.jcsmp.JCSMPErrorResponseException;
@@ -24,8 +27,10 @@ import com.solacesystems.jcsmp.JCSMPException;
 import com.solacesystems.jcsmp.JCSMPFactory;
 import com.solacesystems.jcsmp.JCSMPProperties;
 import com.solacesystems.jcsmp.JCSMPSession;
+import com.solacesystems.jcsmp.JCSMPTransportException;
 import com.solacesystems.jcsmp.OperationNotSupportedException;
 import com.solacesystems.jcsmp.Queue;
+import com.solacesystems.jcsmp.XMLMessageListener;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -34,11 +39,15 @@ import java.util.Properties;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
- 
- public class GuaranteedSubscriber {
+
+/**
+ * Class defining Solace Consumer
+ * Binds to a single queue and reads messages at a defined rate
+ */
+public class SolaceConsumer {
  
     private static final String PROPERTIES_FILE = "consumer.properties";
-    private static final String SAMPLE_NAME = GuaranteedSubscriber.class.getSimpleName();
+    private static final String SAMPLE_NAME = SolaceConsumer.class.getSimpleName();
     private static final String DEFAULT_QUEUE_NAME = "partitioned-queue-1";
     private static final String DEFAULT_MSG_VPN = "default";
     private static final String API = "JCSMP";
@@ -48,6 +57,8 @@ import org.apache.logging.log4j.Logger;
     private static volatile boolean    hasDetectedRedelivery = false;  // detected any messages being redelivered?
     private static volatile boolean    isShutdown = false;             // are we done?
     private static FlowReceiver        flowQueueReceiver;
+    private static volatile long       msgConsumePerSecond = DEFAULT_MSG_CONSUME_PER_SECOND;
+    private static volatile String     queueName = DEFAULT_QUEUE_NAME;
 
     // remember to add log4j2.xml to your classpath
     private static final Logger logger = LogManager.getLogger( SAMPLE_NAME );  // log4j2, but could also use SLF4J, JCL, etc.
@@ -58,18 +69,27 @@ import org.apache.logging.log4j.Logger;
         // Read generic properties file, which cannot be loaded directly into JCSMP properties lists
         final Properties properties = new Properties();
         try {
-            properties.load(GuaranteedSubscriber.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
-            //properties.load(new FileInputStream(PROPERTIES_FILE));
+            properties.load(new FileInputStream(System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE));
         } catch (FileNotFoundException fnfexc) {
             logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
+            logger.warn("attempting to read config resource from class loader");
+            try {
+                properties.load(SolaceConsumer.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+            } catch (NullPointerException npexc) {
+                logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
+                System.exit(-1);
+            }
         } catch (IOException ioexc) {
-            logger.warn( "IOException reading properties file: {}", ioexc.getMessage());
+            logger.error( "IOException reading properties file: {}", ioexc.getMessage());
+            System.exit(-2);
+        } catch (Exception exc) {
+            logger.error( "Error reading properties file: {}", exc.getMessage() );
+            System.exit(-3);
         }
 
-        final String queueName = properties.getProperty("queue.name", DEFAULT_QUEUE_NAME);
+        queueName = properties.getProperty("queue.name", DEFAULT_QUEUE_NAME);
         final String msgVpn = properties.getProperty("vpn_name", DEFAULT_MSG_VPN);
         final String sMsgConsumePerSecond = properties.getProperty("consume.msg.rate", "0");
-        long msgConsumePerSecond = 0;
         try {
             msgConsumePerSecond = ( long )Integer.parseInt(sMsgConsumePerSecond);
         } catch ( NumberFormatException nfe ) {
@@ -103,14 +123,25 @@ import org.apache.logging.log4j.Logger;
         final ConsumerFlowProperties flow_prop = new ConsumerFlowProperties();
         flow_prop.setEndpoint(queue);
         flow_prop.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_AUTO);  // best practice
-        flow_prop.setStartState(true);
-        flow_prop.setTransportWindowSize(10);
+        flow_prop.setActiveFlowIndication(true);
+        Integer winSz = 10;
+        try {
+            String winSzString = properties.getProperty(JCSMPProperties.SUB_ACK_WINDOW_SIZE, "10");
+            winSz = Integer.parseInt(winSzString);
+        } catch (NumberFormatException nfe) { }
+        flow_prop.setTransportWindowSize(winSz);
 
         System.out.printf("Attempting to bind to queue '%s' on the broker.%n", queueName);
         try {
-            // A simple consumer called on the main thread to facilitate message throttling
-            flowQueueReceiver = session.createFlow(null, flow_prop);
-        } catch (OperationNotSupportedException e) {  // not allowed to do this
+            // see bottom of file for QueueFlowListener class, which receives the messages from the queue
+            flowQueueReceiver = session.createFlow(new QueueFlowListener(), flow_prop, null, new FlowEventHandler() {
+                @Override
+                public void handleEvent(Object source, FlowEventArgs event) {
+                    // Flow events are usually: active, reconnecting (i.e. unbound), reconnected, active
+                    logger.info("### Received a Flow event: " + event);
+                    // try disabling and re-enabling the queue to see in action
+                }
+            });        } catch (OperationNotSupportedException e) {  // not allowed to do this
             throw e;
         } catch (JCSMPErrorResponseException e) {  // something else went wrong: queue not exist, queue shutdown, etc.
             logger.error(e);
@@ -119,33 +150,60 @@ import org.apache.logging.log4j.Logger;
             return;
         }
 
+        flowQueueReceiver.start();
          // async queue receive working now, so time to wait until done...
-         System.out.println(SAMPLE_NAME + " connected, and running. Press [ENTER] to quit.");
+        System.out.println(SAMPLE_NAME + " connected, and running. Press [ENTER] to quit.");
         logger.info( "Ready to read messages from broker msgvpn='{}' queueName='{}'", msgVpn, queueName );
          
-        long outputTimeMark = System.currentTimeMillis();
-        final long baseSleepTimeBetweenReceive = 1000L / msgConsumePerSecond;
-
         while (System.in.available() == 0 && !isShutdown) {
-            long receiveStart = System.currentTimeMillis();
-            flowQueueReceiver.receive( 200 );     // 200ms time-out
-            msgRecvCounter++;
-            long sleepTime = baseSleepTimeBetweenReceive - (System.currentTimeMillis() - receiveStart); // subtract out processing time
-            Thread.sleep( sleepTime > 0L ? sleepTime : 0L );
-            if ( System.currentTimeMillis() > ( outputTimeMark + 1000L ) ) {
-                outputTimeMark = System.currentTimeMillis();
-                System.out.printf("%s %s Received msgs/s: %,d%n",API,SAMPLE_NAME,msgRecvCounter);  // simple way of calculating message rates
-                msgRecvCounter = 0;
-                if (hasDetectedRedelivery) {  // try shutting -> enabling the queue on the broker to see this
-                    System.out.println("*** Redelivery detected ***");
-                    hasDetectedRedelivery = false;  // only show the error once per second
-                }
-            } 
+            Thread.sleep(1000);  // wait 1 second
+            System.out.printf("%s %s Received msgs/s: %,d%n",API,SAMPLE_NAME,msgRecvCounter);  // simple way of calculating message rates
+            msgRecvCounter = 0;
+            if (hasDetectedRedelivery) {  // try shutting -> enabling the queue on the broker to see this
+                System.out.println("*** Redelivery detected ***");
+                hasDetectedRedelivery = false;  // only show the error once per second
+            }
         }
         isShutdown = true;
         flowQueueReceiver.stop();
         Thread.sleep(1000);
         session.closeSession();  // will also close consumer object
         System.out.println("Main thread quitting.");
+    }
+
+    /** Very simple static inner class, used for receives messages from Queue Flows. **/
+    private static class QueueFlowListener implements XMLMessageListener {
+
+        @Override
+        public void onReceive(BytesXMLMessage msg) {
+            msgRecvCounter++;
+            if (msg.getRedelivered()) {  // useful check
+                // this is the broker telling the consumer that this message has been sent and not ACKed before.
+                // this can happen if an exception is thrown, or the broker restarts, or the netowrk disconnects
+                // perhaps an error in processing? Should do extra checks to avoid duplicate processing
+                hasDetectedRedelivery = true;
+            }
+            // Messages are removed from the broker queue when the ACK is received.
+            // Therefore, DO NOT ACK until all processing/storing of this message is complete.
+            // NOTE that messages can be acknowledged from a different thread.
+            msg.ackMessage();  // ACKs are asynchronous
+            try {
+                Thread.sleep( 1000L / msgConsumePerSecond );
+            } catch ( InterruptedException iexc ) {
+                isShutdown = true;
+            }
+        }
+
+        @Override
+        public void onException(JCSMPException e) {
+            logger.warn("### Queue " + queueName + " Flow handler received exception.  Stopping!!", e);
+            if (e instanceof JCSMPTransportException) {  // all reconnect attempts failed
+                isShutdown = true;  // let's quit; or, could initiate a new connection attempt
+            } else {
+                // Generally unrecoverable exception, probably need to recreate and restart the flow
+                flowQueueReceiver.close();
+                // add logic in main thread to restart FlowReceiver, or can exit the program
+            }
+        }
     }
 }

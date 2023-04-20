@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: publisher-helper
+  namespace: default
+  labels:
+    app: publisher-helper
+spec:
+  volumes:
+  - name: publisher-config-file
+    secret:
+      secretName: publisher-secret
+  containers:
+  - name: solace-publisher
+    ## Use the solace-consumer image but do not start as consumer
+    ## Meant to be interactive
+    image: solace-consumer:latest
+    command: [ "/bin/bash", "-c", "--" ]
+    args: [ "while true; do sleep 10; done;" ]
+    resources:
+      limits:
+        cpu: "125m"
+        memory: "256Mi"
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+    volumeMounts:
+      - mountPath: /opt/partitioned-queue-demo/config
+        name: publisher-config-file
+        readOnly: true
+    imagePullPolicy: Never
+  restartPolicy: Never

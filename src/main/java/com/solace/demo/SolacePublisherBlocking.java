@@ -18,10 +18,7 @@ package com.solace.demo;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-/**
- * Hello world!
- *
- */
+
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Properties;
@@ -49,11 +46,11 @@ import com.solacesystems.jcsmp.XMLMessage;
  * It publishes messages on topics.  Receiving applications
  * should use Queues with topic subscriptions added to them.
  */
-public class GuaranteedBlockingPublisher {
+public class SolacePublisherBlocking {
     
 //    private static final String PROPERTIES_FILE = "src/main/resources/publisher.properties";
     private static final String PROPERTIES_FILE = "publisher.properties";
-    private static final String SAMPLE_NAME = GuaranteedBlockingPublisher.class.getSimpleName();
+    private static final String SAMPLE_NAME = SolacePublisherBlocking.class.getSimpleName();
     private static final String TOPIC_PREFIX = "pqdemo/";  // used as the topic "root"
     private static final String API = "Java";
     private static final int APPROX_MSG_RATE_PER_SEC = 10;
@@ -62,6 +59,9 @@ public class GuaranteedBlockingPublisher {
     private static volatile int msgSentCounter = 0;                   // num messages sent
     private static volatile boolean isShutdown = false;
     
+    private static final int DEFAULT_NUMBER_OF_KEYS = 20;
+    private static volatile int numberOfOrders = DEFAULT_NUMBER_OF_KEYS;
+
     private static final Logger logger = LogManager.getLogger( SAMPLE_NAME );  // log4j2, but could also use SLF4J, JCL, etc.
 
     /** Main method. */
@@ -87,16 +87,36 @@ public class GuaranteedBlockingPublisher {
             }
         }
 
-        // get connection properties from file
         final Properties properties = new Properties();
         try {
-//            properties.load(new FileInputStream(PROPERTIES_FILE));
-            properties.load(GuaranteedSubscriber.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+            properties.load(new FileInputStream(System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE));
         } catch (FileNotFoundException fnfexc) {
-            logger.warn("File not found exception: {}", fnfexc.getMessage());
+            logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
+            logger.warn("attempting to read config resource from class loader");
+            try {
+                properties.load(SolacePublisher.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+            } catch (NullPointerException npexc) {
+                logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
+                System.exit(-1);
+            }
         } catch (IOException ioexc) {
-            logger.warn( "IOException: {}", ioexc.getMessage());
+            logger.error( "IOException reading properties file: {}", ioexc.getMessage());
+            System.exit(-2);
+        } catch (Exception exc) {
+            logger.error( "Error reading properties file: {}", exc.getMessage() );
+            System.exit(-3);
         }
+
+        final String useRandomKeyString = properties.getProperty("use.random.key", "false");
+        final boolean useRandomKey = ( useRandomKeyString.toLowerCase().contentEquals("true") ? true : false );
+
+        final String numberOfOrdersString = properties.getProperty("number.of.unique.keys", String.valueOf(DEFAULT_NUMBER_OF_KEYS));
+        try {
+            numberOfOrders = Integer.parseInt(numberOfOrdersString);
+            if ( numberOfOrders < 1 ) {
+                numberOfOrders = DEFAULT_NUMBER_OF_KEYS;
+            }
+        } catch ( NumberFormatException nfe ) { } // will use default
 
         // https://docs.solace.com/Solace-PubSub-Messaging-APIs/API-Developer-Guide/Configuring-Connection-T.htm
         // ready to connect now
@@ -145,21 +165,25 @@ public class GuaranteedBlockingPublisher {
                 char chosenCharacter = (char)(Math.round(msgSentCounter % 26) + 65);  // rotate through letters [A-Z]
                 Arrays.fill(payload,(byte)chosenCharacter);  // fill the payload completely with that char
 
-                String locationCode = GuaranteedNonBlockingPublisher.getRandomLocationCode();
+                String locationCode = SolacePublisher.getRandomLocationCode();
 
-                String orderNumber = GuaranteedNonBlockingPublisher.getRandomOrderNumber();
+                String orderNumber = SolacePublisher.getRandomOrderNumber();
 
                 // dynamic topics!!
                 String topicString = new StringBuilder(TOPIC_PREFIX).append( locationCode + "/" ).append(String.valueOf(msgSentCounter)).toString();
 
                 Properties extendedMessageProperties = new Properties();
-                // extendedMessageProperties.put(
-                //             XMLMessage.MessageUserPropertyConstants.QUEUE_PARTITION_KEY, 
-                //             String.format( "%05d", orderNumber ) );                     // Create with partition key: orderNumber 1 - 20
+
+                String partitionKey;
+                if (useRandomKey) {
+                    partitionKey = UUID.randomUUID().toString();
+                } else {
+                    partitionKey = orderNumber;
+                }
 
                 extendedMessageProperties.put(
                             XMLMessage.MessageUserPropertyConstants.QUEUE_PARTITION_KEY, 
-                            UUID.randomUUID().toString() );                     // Create with random partition key
+                            partitionKey );
 
                 OutboundMessage message = messageBuilder.build(payload, extendedMessageProperties);    
                             

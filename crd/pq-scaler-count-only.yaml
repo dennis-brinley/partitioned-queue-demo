@@ -17,7 +17,7 @@ spec:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleDown:
-          stabilizationWindowSeconds: 60
+          stabilizationWindowSeconds: 30
           policies:
           - type:          Pods
             value:         2
@@ -29,9 +29,6 @@ spec:
           - type:          Pods
             value:         4
             periodSeconds: 30
-          # - type:          Percent
-          #   value:         100
-          #   periodSeconds: 30
           selectPolicy:    Max
   triggers:
   - type: solace-event-queue
@@ -40,7 +37,6 @@ spec:
       messageVpn:               default
       queueName:                partitioned-queue-2
       messageCountTarget:       '50'
-      messageReceiveRateTarget: '10'
-#      messageSpoolUsageTarget:  '1000'
+#      messageReceiveRateTarget: '10'
     authenticationRef:
       name: pq-trigger-auth

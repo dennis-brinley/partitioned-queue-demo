@@ -32,4 +32,18 @@ spec:
             name: consumer-config-file
             readOnly: true
         imagePullPolicy: Never
+      - name: solace-consumer-2
+        image: solace-consumer:latest
+        resources:
+          limits:
+            cpu: "125m"
+            memory: "256Mi"
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+        volumeMounts:
+          - mountPath: /opt/partitioned-queue-demo/config
+            name: consumer-config-file
+            readOnly: true
+        imagePullPolicy: Never
       restartPolicy: Always

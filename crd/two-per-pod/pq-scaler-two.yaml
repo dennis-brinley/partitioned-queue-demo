@@ -9,29 +9,26 @@ spec:
     apiVersion:    apps/v1
     kind:          Deployment
     name:          solace-consumer
-  pollingInterval:  5
-  cooldownPeriod:   60
+  pollingInterval:  3
+  cooldownPeriod:  60
   minReplicaCount:  1
-  maxReplicaCount:  12
+  maxReplicaCount:  6
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleDown:
-          stabilizationWindowSeconds: 60
+          stabilizationWindowSeconds: 30
           policies:
           - type:          Pods
-            value:         2
+            value:         1
             periodSeconds: 30
           selectPolicy:    Min
         scaleUp:
           stabilizationWindowSeconds: 0
           policies:
           - type:          Pods
-            value:         4
+            value:         2
             periodSeconds: 30
-          # - type:          Percent
-          #   value:         100
-          #   periodSeconds: 30
           selectPolicy:    Max
   triggers:
   - type: solace-event-queue
@@ -39,8 +36,7 @@ spec:
       solaceSempBaseURL:        http://pq-pubsubplus.solace.svc.cluster.local:8080
       messageVpn:               default
       queueName:                partitioned-queue-2
-      messageCountTarget:       '50'
-      messageReceiveRateTarget: '10'
-#      messageSpoolUsageTarget:  '1000'
+      messageCountTarget:       '100'
+      messageReceiveRateTarget: '20'
     authenticationRef:
       name: pq-trigger-auth

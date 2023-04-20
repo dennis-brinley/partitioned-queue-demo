@@ -44,11 +44,10 @@ import com.solacesystems.jcsmp.XMLMessage;
  * It publishes messages on topics.  Receiving applications
  * should use Queues with topic subscriptions added to them.
  */
-public class GuaranteedNonBlockingPublisher {
+public class SolacePublisher {
     
-//    private static final String PROPERTIES_FILE = "src/main/resources/publisher.properties";
     private static final String PROPERTIES_FILE = "publisher.properties";
-    private static final String SIMPLE_NAME = GuaranteedNonBlockingPublisher.class.getSimpleName();
+    private static final String SIMPLE_NAME = SolacePublisher.class.getSimpleName();
     private static final String TOPIC_PREFIX = "pqdemo/";  // used as the topic "root"
     private static final String API = "Java";
     private static final int APPROX_MSG_RATE_PER_SEC = 10;
@@ -56,6 +55,9 @@ public class GuaranteedNonBlockingPublisher {
     
     private static volatile int msgSentCounter = 0;                   // num messages sent
     private static volatile boolean isShutdown = false;
+
+    private static final int DEFAULT_NUMBER_OF_KEYS = 20;
+    private static volatile int numberOfOrders = DEFAULT_NUMBER_OF_KEYS;
     
     private static final Logger logger = LogManager.getLogger( SIMPLE_NAME );  // log4j2, but could also use SLF4J, JCL, etc.
 
@@ -82,16 +84,36 @@ public class GuaranteedNonBlockingPublisher {
             }
         }
 
-        // get connection properties from file
         final Properties properties = new Properties();
         try {
-//            properties.load(new FileInputStream(PROPERTIES_FILE));
-            properties.load(GuaranteedSubscriber.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+            properties.load(new FileInputStream(System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE));
         } catch (FileNotFoundException fnfexc) {
             logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
+            logger.warn("attempting to read config resource from class loader");
+            try {
+                properties.load(SolacePublisher.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+            } catch (NullPointerException npexc) {
+                logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
+                System.exit(-1);
+            }
         } catch (IOException ioexc) {
-            logger.warn( "IOException reading properties file: {}", ioexc.getMessage());
+            logger.error( "IOException reading properties file: {}", ioexc.getMessage());
+            System.exit(-2);
+        } catch (Exception exc) {
+            logger.error( "Error reading properties file: {}", exc.getMessage() );
+            System.exit(-3);
         }
+
+        final String useRandomKeyString = properties.getProperty("use.random.key", "false");
+        final boolean useRandomKey = ( useRandomKeyString.toLowerCase().contentEquals("true") ? true : false );
+
+        final String numberOfOrdersString = properties.getProperty("number.of.unique.keys", String.valueOf(DEFAULT_NUMBER_OF_KEYS));
+        try {
+            numberOfOrders = Integer.parseInt(numberOfOrdersString);
+            if ( numberOfOrders < 1 ) {
+                numberOfOrders = DEFAULT_NUMBER_OF_KEYS;
+            }
+        } catch ( NumberFormatException nfe ) { } // will use default
 
         // ready to connect now
         final MessagingService messagingService = MessagingService.builder(ConfigurationProfile.V1)
@@ -163,14 +185,17 @@ public class GuaranteedNonBlockingPublisher {
                 String topicString = new StringBuilder(TOPIC_PREFIX).append( locationCode + "/" ).append(String.valueOf(msgSentCounter)).toString();
                 
                 Properties extendedMessageProperties = new Properties();
-                // extendedMessageProperties.put(
-                //             XMLMessage.MessageUserPropertyConstants.QUEUE_PARTITION_KEY, 
-                //             String.format( "%05d", orderNumber ) );                     // Create with partition key: orderNumber 1 - 20
+
+                String partitionKey;
+                if (useRandomKey) {
+                    partitionKey = UUID.randomUUID().toString();
+                } else {
+                    partitionKey = orderNumber;
+                }
 
                 extendedMessageProperties.put(
                             XMLMessage.MessageUserPropertyConstants.QUEUE_PARTITION_KEY, 
-//                            UUID.randomUUID().toString() );                         // Create with random partition key
-                            orderNumber );                         // Create with random partition key
+                            partitionKey );
 
                 OutboundMessage message = messageBuilder.build(payload, extendedMessageProperties);    
                 publisher.publish(message,Topic.of(topicString));  // send the message
@@ -215,7 +240,7 @@ public class GuaranteedNonBlockingPublisher {
     }
 
     public static String getRandomOrderNumber() {
-        Integer orderNumber = ( ( int )Math.floor( Math.random() * 20 ) ) + 1;
-        return String.format( "%05d", orderNumber );
+        Integer orderNumber = ( ( int )Math.floor( Math.random() * numberOfOrders ) ) + 1;
+        return String.format( "%12d", orderNumber );
     }
 }
