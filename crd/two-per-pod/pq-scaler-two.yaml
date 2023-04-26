@@ -17,7 +17,7 @@ spec:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleDown:
-          stabilizationWindowSeconds: 30
+          stabilizationWindowSeconds: 45
           policies:
           - type:          Pods
             value:         1
@@ -37,6 +37,6 @@ spec:
       messageVpn:               default
       queueName:                partitioned-queue-2
       messageCountTarget:       '100'
-      messageReceiveRateTarget: '20'
+      messageReceiveRateTarget: '24'
     authenticationRef:
       name: pq-trigger-auth

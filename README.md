@@ -42,19 +42,27 @@ The Solace scaler defines the interface between KEDA and PubSub+ brokers. The in
 
 # Components
 
+**Core Component List**
+- **Java Jar File** - Code for Solace Publisher and Consumer
+- **Consumer Application Image** - Defined in Docker Image; Used for both the consumer and publisher apps
+- **Consumer Application Deployment** - Defined in Kubernetes from  `solace-consumer.yaml`
+- **Publisher Helper Pod** - A pod configured to publish messages in the K8s cluster; utilized interactively
+- **KEDA** - Kubernetes Event Driven Autoscaler, A Kubernetes Operator and Metrics Server deployed to the Kubernetes cluster and configured to scale applications
+- **KEDA Scaled Object** - Defines the scaled application and connection to Solace PS+ Broker and queue
+
 ## Jar File
 Jar file with dependencies can be called with different class paths.
 
 **Publisher App**
 - Uses Java API (referencing JCSMP opaquely)
-- Configure using ```resources/publisher.properties```
+- Configure using ```crd/publisher-secret.yaml```
 - Class: SolacePublisher
 - Class: SolacePublisherBlocking
 
 **Consumer App**
 - Called in Deployment container
 - Uses JCSMP API directly
-- Configure using ```resources/consumer.properties```
+- Configure using ```crd/consumer-secret.yaml```
 - SolaceConsumer (Default) - Creates queue flow receiver flow and calls start() method; read in event handler
 
 ### Build Jar File
@@ -112,12 +120,12 @@ The following files should be configured for use in your environment with your P
 |secret-auth.yaml|Secret for Login credentials and KEDA TriggerAuthentication|Modify the secret with your SEMP login credentials|
 
 ### KEDA Scalers
-The following are KEDA Scaler definitions for use with PubSub+. You will need to configure SEMP endpoint details including Message VPN and queue. These scalers define settings to determine behavior of the applications. The files are all versions of the same scaler with different settings.
-|Scaler File Name|Purpose|
+The following are KEDA Scaler definitions for use with PubSub+. You will need to configure SEMP endpoint details including Message VPN and queue. These scalers define settings to determine behavior of the applications. The same scaler name is used in all three CRD definitions.
+|Scaler File Name|Purpose|Details|
 |---|---|---|
-|pq-scaler.yaml|Scales applications from 1-12 replicas. Uses `messageCountTarget=50` and `messageReceiveRateTarget=10`. Should yield good results|
-|pq-scaler-count-only.yaml|Scales application from 1-12 replicas. Uses `messageCountTarget=50` **ONLY**. Using this scaler instance will likely result in replica flapping under constant load. (negative result)|
-|pq-scaler-two.yaml|Scales application from 1-6 instances. Uses `messageCountTarget=100` and `messageReceiveRateTarget=20`. Intended for use with 2 consumers per replica. **Important:** Use with `solace-consumer-two.yaml` deployment, which has 2 containers per replica.|
+|pq-scaler.yaml|Positive case<br>shows reactive scaling and steady-state under load|Scales applications from 1-12 replicas.<br>Uses `messageCountTarget=50` and `messageReceiveRateTarget=10`|
+|pq-scaler-count-only.yaml|Show Flapping under steady load.<br>Illustrates why received message rate is important|Scales application from 1-12 replicas. Uses `messageCountTarget=50` **ONLY**.<br>Using this scaler instance will likely result in replica flapping under constant load. (negative result)|
+|pq-scaler-two.yaml|Showcase multiple consumers per replica|Scales application from 1-6 instances. Uses `messageCountTarget=100` and `messageReceiveRateTarget=20`.<br>Intended for use with 2 consumers per replica.<br>**Important:** Use with `solace-consumer-two.yaml` deployment, which has 2 containers per replica.|
 
 ## Deploy Components
 After updating configuration as specified above, deploy to Kubernetes and observe results using PS+ dashboard:
@@ -187,4 +195,7 @@ kubectl delete -f crd/publisher-secret.yaml
 kubectl delete -f crd/consumer-secret.yaml
 
 kubectl delete -f crd/secret-auth.yaml
+
+## If you're so included:
+helm uninstall -n keda keda
 ```
