@@ -16,10 +16,8 @@
 
 package com.solace.demo;
 
-import com.solacesystems.jcsmp.BytesXMLMessage;
 import com.solacesystems.jcsmp.ConsumerFlowProperties;
-import com.solacesystems.jcsmp.FlowEventArgs;
-import com.solacesystems.jcsmp.FlowEventHandler;
+import com.solacesystems.jcsmp.EndpointProperties;
 import com.solacesystems.jcsmp.FlowReceiver;
 import com.solacesystems.jcsmp.JCSMPChannelProperties;
 import com.solacesystems.jcsmp.JCSMPErrorResponseException;
@@ -27,10 +25,9 @@ import com.solacesystems.jcsmp.JCSMPException;
 import com.solacesystems.jcsmp.JCSMPFactory;
 import com.solacesystems.jcsmp.JCSMPProperties;
 import com.solacesystems.jcsmp.JCSMPSession;
-import com.solacesystems.jcsmp.JCSMPTransportException;
 import com.solacesystems.jcsmp.OperationNotSupportedException;
 import com.solacesystems.jcsmp.Queue;
-import com.solacesystems.jcsmp.XMLMessageListener;
+import com.solacesystems.jcsmp.transaction.TransactedSession;
 
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -39,29 +36,22 @@ import java.util.Properties;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
-/**
- * Class defining Solace Consumer
- * Binds to a single queue and reads messages at a defined rate
- */
-public class SolaceConsumer {
  
-    public static final String ARG_PROPERTIES_FILE = "--properties-file";
-    public static final String ARG_CONFIG_FROM_ENV = "--env";
-
+public class SolaceTransactedConsumer {
+ 
     private static final String PROPERTIES_FILE = "consumer.properties";
-    private static final String SAMPLE_NAME = SolaceConsumer.class.getSimpleName();
+    private static final String SAMPLE_NAME = SolaceTransactedConsumer.class.getSimpleName();
     private static final String DEFAULT_QUEUE_NAME = "partitioned-queue-1";
     private static final String DEFAULT_MSG_VPN = "default";
     private static final String API = "JCSMP";
     
+    private static final int    DEFAULT_MSG_CONSUME_PER_SECOND = 10;
+    private static final int    DEFAULT_TRANSACTED_MSG_COUNT = 8;
+
     private static volatile int        msgRecvCounter = 0;                 // num messages received
-    private static final int           DEFAULT_MSG_CONSUME_PER_SECOND = 2;
     private static volatile boolean    hasDetectedRedelivery = false;  // detected any messages being redelivered?
     private static volatile boolean    isShutdown = false;             // are we done?
     private static FlowReceiver        flowQueueReceiver;
-    private static volatile long       msgConsumePerSecond = DEFAULT_MSG_CONSUME_PER_SECOND;
-    private static volatile String     queueName = DEFAULT_QUEUE_NAME;
 
     // remember to add log4j2.xml to your classpath
     private static final Logger logger = LogManager.getLogger( SAMPLE_NAME );  // log4j2, but could also use SLF4J, JCL, etc.
@@ -69,17 +59,18 @@ public class SolaceConsumer {
      /** This is the main app.  Use this type of app for receiving Guaranteed messages (e.g. via a queue endpoint). */
     public static void main(String... args) throws JCSMPException, InterruptedException, IOException {
 
+        // Read generic properties file, which cannot be loaded directly into JCSMP properties lists
         final Properties properties = new Properties();
         boolean configFromEnv = false;
         String configFile = System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE;
         if ( args.length > 0 ) {
             for ( String a : args ) {
-                if ( a.contentEquals( ARG_CONFIG_FROM_ENV ) ) {
+                if ( a.contentEquals( SolaceConsumer.ARG_CONFIG_FROM_ENV ) ) {
                     configFromEnv = true;
-                    getConsumerPropertiesFromEnv(properties);
+                    SolaceConsumer.getConsumerPropertiesFromEnv(properties);
                     break;
                 } else if ( a.startsWith(SolaceConsumer.ARG_PROPERTIES_FILE ) && a.length() > SolaceConsumer.ARG_PROPERTIES_FILE.length() ) {
-                    configFile = a.substring(SolaceConsumer.ARG_PROPERTIES_FILE.length() + 1);
+                    configFile = a.substring(SolaceConsumer.ARG_PROPERTIES_FILE.length() +1);
                     break;
                 }
             }
@@ -94,7 +85,7 @@ public class SolaceConsumer {
                 logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
                 logger.warn("attempting to read config resource from class loader");
                 try {
-                    properties.load(SolaceConsumer.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+                    properties.load(SolaceTransactedConsumer.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
                 } catch (NullPointerException npexc) {
                     logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
                     System.exit(-1);
@@ -108,18 +99,24 @@ public class SolaceConsumer {
             }
         }
 
-        queueName = properties.getProperty("queue.name", DEFAULT_QUEUE_NAME);
+        final String queueName = properties.getProperty("queue.name", DEFAULT_QUEUE_NAME);
         final String msgVpn = properties.getProperty("vpn_name", DEFAULT_MSG_VPN);
         final String sMsgConsumePerSecond = properties.getProperty("consume.msg.rate", "0");
+        final String sTransactedMsgCount = properties.getProperty("transacted.msg.count", "0");
+        long msgConsumePerSecond = 0;
+        int  transactedMsgCount = 0;
         try {
             msgConsumePerSecond = ( long )Integer.parseInt(sMsgConsumePerSecond);
-            logger.info("Found Message Consume Rate = {}", msgConsumePerSecond );
+            transactedMsgCount = Integer.parseInt(sTransactedMsgCount);
         } catch ( NumberFormatException nfe ) {
             logger.warn( "Could not parse message rate [consume.msg.rate] from properties, using default={} msgs/second", DEFAULT_MSG_CONSUME_PER_SECOND );
+            logger.warn( "Could not parse message rate [transacted.msg.count] from properties, using default={} msgs/second", DEFAULT_TRANSACTED_MSG_COUNT);
         } finally {
             if ( msgConsumePerSecond < 1L || msgConsumePerSecond > 1000L ) {
-                logger.info( "Message Consume Rate Out of Bounds; Defaulting to {}", DEFAULT_MSG_CONSUME_PER_SECOND );
                 msgConsumePerSecond = DEFAULT_MSG_CONSUME_PER_SECOND;
+            }
+            if ( transactedMsgCount < 1 || transactedMsgCount > 256 ) {
+                transactedMsgCount = DEFAULT_TRANSACTED_MSG_COUNT;
             }
         }
 
@@ -145,26 +142,27 @@ public class SolaceConsumer {
         // Create a Flow be able to bind to and consume messages from the Queue.
         final ConsumerFlowProperties flow_prop = new ConsumerFlowProperties();
         flow_prop.setEndpoint(queue);
-        flow_prop.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_AUTO);  // best practice
-        flow_prop.setActiveFlowIndication(true);
-        Integer winSz = 10;
+//        flow_prop.setAckMode(JCSMPProperties.SUPPORTED_MESSAGE_ACK_AUTO);  // best practice
+        flow_prop.setStartState(true);
+
+        EndpointProperties endpointProperties = new EndpointProperties();
+        endpointProperties.setAccessType(EndpointProperties.ACCESSTYPE_NONEXCLUSIVE);
+
+        // flow_prop.setTransportWindowSize(10);
+        Integer winSz = 100;
         try {
-            String winSzString = properties.getProperty(JCSMPProperties.SUB_ACK_WINDOW_SIZE, "10");
+            String winSzString = properties.getProperty(JCSMPProperties.SUB_ACK_WINDOW_SIZE, "100");
             winSz = Integer.parseInt(winSzString);
         } catch (NumberFormatException nfe) { }
         flow_prop.setTransportWindowSize(winSz);
 
+        final TransactedSession txSession = session.createTransactedSession();
+
         System.out.printf("Attempting to bind to queue '%s' on the broker.%n", queueName);
         try {
-            // see bottom of file for QueueFlowListener class, which receives the messages from the queue
-            flowQueueReceiver = session.createFlow(new QueueFlowListener(), flow_prop, null, new FlowEventHandler() {
-                @Override
-                public void handleEvent(Object source, FlowEventArgs event) {
-                    // Flow events are usually: active, reconnecting (i.e. unbound), reconnected, active
-                    logger.info("### Received a Flow event: " + event);
-                    // try disabling and re-enabling the queue to see in action
-                }
-            });        } catch (OperationNotSupportedException e) {  // not allowed to do this
+            // A simple consumer called on the main thread to facilitate message throttling
+            flowQueueReceiver = txSession.createFlow(null, flow_prop, endpointProperties);
+        } catch (OperationNotSupportedException e) {  // not allowed to do this
             throw e;
         } catch (JCSMPErrorResponseException e) {  // something else went wrong: queue not exist, queue shutdown, etc.
             logger.error(e);
@@ -173,87 +171,38 @@ public class SolaceConsumer {
             return;
         }
 
-        flowQueueReceiver.start();
          // async queue receive working now, so time to wait until done...
         System.out.println(SAMPLE_NAME + " connected, and running. Press [ENTER] to quit.");
         logger.info( "Ready to read messages from broker msgvpn='{}' queueName='{}'", msgVpn, queueName );
          
+        long outputTimeMark = System.currentTimeMillis();
+        final long baseSleepTimeBetweenReceive = 1000L / msgConsumePerSecond;
+        int txMsgCount = 0;
+
         while (System.in.available() == 0 && !isShutdown) {
-            Thread.sleep(1000);  // wait 1 second
-            logger.debug("{} {} Received msgs/s: {}", API, SAMPLE_NAME, msgRecvCounter );
-//            System.out.printf("%s %s Received msgs/s: %,d%n",API,SAMPLE_NAME,msgRecvCounter);  // simple way of calculating message rates
-            msgRecvCounter = 0;
-            if (hasDetectedRedelivery) {  // try shutting -> enabling the queue on the broker to see this
-                System.out.println("*** Redelivery detected ***");
-                hasDetectedRedelivery = false;  // only show the error once per second
+            long receiveStart = System.currentTimeMillis();
+            flowQueueReceiver.receive( 200 );     // 200ms time-out
+            msgRecvCounter++;
+            if ( ++txMsgCount > transactedMsgCount ) {
+                txSession.commit();
+                txMsgCount = 0;
             }
+            long sleepTime = baseSleepTimeBetweenReceive - (System.currentTimeMillis() - receiveStart); // subtract out processing time
+            Thread.sleep( sleepTime > 0L ? sleepTime : 0L );
+            if ( System.currentTimeMillis() > ( outputTimeMark + 1000L ) ) {
+                outputTimeMark = System.currentTimeMillis();
+                logger.debug("{} {} Received msgs/s: {}", API, SAMPLE_NAME, msgRecvCounter );
+                msgRecvCounter = 0;
+                if (hasDetectedRedelivery) {  // try shutting -> enabling the queue on the broker to see this
+                    System.out.println("*** Redelivery detected ***");
+                    hasDetectedRedelivery = false;  // only show the error once per second
+                }
+            } 
         }
         isShutdown = true;
         flowQueueReceiver.stop();
         Thread.sleep(1000);
         session.closeSession();  // will also close consumer object
         System.out.println("Main thread quitting.");
-    }
-
-    /** Very simple static inner class, used for receives messages from Queue Flows. **/
-    private static class QueueFlowListener implements XMLMessageListener {
-
-        @Override
-        public void onReceive(BytesXMLMessage msg) {
-            msgRecvCounter++;
-            if (msg.getRedelivered()) {  // useful check
-                // this is the broker telling the consumer that this message has been sent and not ACKed before.
-                // this can happen if an exception is thrown, or the broker restarts, or the netowrk disconnects
-                // perhaps an error in processing? Should do extra checks to avoid duplicate processing
-                hasDetectedRedelivery = true;
-            }
-            // Messages are removed from the broker queue when the ACK is received.
-            // Therefore, DO NOT ACK until all processing/storing of this message is complete.
-            // NOTE that messages can be acknowledged from a different thread.
-//            msg.ackMessage();  // ACKs are asynchronous
-            try {
-                Thread.sleep( 1000L / msgConsumePerSecond );
-            } catch ( InterruptedException iexc ) {
-                isShutdown = true;
-            }
-        }
-
-        @Override
-        public void onException(JCSMPException e) {
-            logger.warn("### Queue " + queueName + " Flow handler received exception.  Stopping!!", e);
-            if (e instanceof JCSMPTransportException) {  // all reconnect attempts failed
-                isShutdown = true;  // let's quit; or, could initiate a new connection attempt
-            } else {
-                // Generally unrecoverable exception, probably need to recreate and restart the flow
-                flowQueueReceiver.close();
-                // add logic in main thread to restart FlowReceiver, or can exit the program
-            }
-        }
-    }
-
-    public static void getConsumerPropertiesFromEnv( Properties properties ) {
-        String host             = System.getenv( "SOLACE_HOST" );
-        String vpn_name         = System.getenv( "SOLACE_MSGVPN_NAME" );
-        String username         = System.getenv( "SOLACE_MSG_USER" );
-        String password         = System.getenv( "SOLACE_MSG_PASSWORD" );
-        String queue_name       = System.getenv( "SOLACE_QUEUE_NAME" );
-        String window_sz        = System.getenv( "SUB_ACK_WINDOW_SIZE" );
-        String consume_rate     = System.getenv( "CONSUME_MSG_RATE" );
-
-        logger.info("window={}; consume={}", window_sz, consume_rate);
-
-        properties.put( "host",                 ( host != null          ? host          : "localhost" ) );
-        properties.put( "vpn_name",             ( vpn_name != null      ? vpn_name      : "default" ) );
-        properties.put( "username",             ( username != null      ? username      : "client1" ) );
-        properties.put( "password",             ( password != null      ? password      : "client1pass" ) );
-        properties.put( "queue.name",           ( queue_name != null    ? queue_name    : "queue1" ) );
-        properties.put( "consume.msg.rate",     ( consume_rate != null  ? consume_rate  : "10" ) ); //( consume_rate != null  ? Integer.parseInt(consume_rate)  : 10 ) );
-        try {
-            properties.put( "sub_ack_window_size",  ( window_sz != null     ? Integer.parseInt(window_sz) : 100 ) );
-        } catch ( NumberFormatException nfexc ) {
-            logger.warn( nfexc.getMessage() );
-            logger.warn( nfexc.getStackTrace() );
-        }
-        return;
     }
 }

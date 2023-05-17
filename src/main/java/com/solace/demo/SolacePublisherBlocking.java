@@ -50,7 +50,7 @@ public class SolacePublisherBlocking {
     
 //    private static final String PROPERTIES_FILE = "src/main/resources/publisher.properties";
     private static final String PROPERTIES_FILE = "publisher.properties";
-    private static final String SAMPLE_NAME = SolacePublisherBlocking.class.getSimpleName();
+    private static final String SIMPLE_NAME = SolacePublisherBlocking.class.getSimpleName();
     private static final String TOPIC_PREFIX = "pqdemo/";  // used as the topic "root"
     private static final String API = "Java";
     private static final int APPROX_MSG_RATE_PER_SEC = 10;
@@ -62,49 +62,62 @@ public class SolacePublisherBlocking {
     private static final int DEFAULT_NUMBER_OF_KEYS = 20;
     private static volatile int numberOfOrders = DEFAULT_NUMBER_OF_KEYS;
 
-    private static final Logger logger = LogManager.getLogger( SAMPLE_NAME );  // log4j2, but could also use SLF4J, JCL, etc.
+    private static final Logger logger = LogManager.getLogger( SolacePublisherBlocking.class );  // log4j2, but could also use SLF4J, JCL, etc.
 
     /** Main method. */
     public static void main(String... args) throws IOException {
 
         // Look for arg[0] and interpret as numeric msg/sec rate of publication
+        final Properties properties = new Properties();
         int approxMsgRatePerSecond = APPROX_MSG_RATE_PER_SEC;
-        if (args.length > 0) {
-            Integer i = 0;
-            try {
-                i = Integer.valueOf(args[0]);
-                if ( i < 0 || i > 1000 ) {
-                    logger.warn( "The input argument (published msgs/second) was out of bounds; using default" );
-                    i = 0;
-                }
-            } catch ( NumberFormatException nfe ) {
-                logger.warn(nfe.getMessage());
-                logger.warn( "Could not convert input argument to an integer value, using default" );
-            } finally {
-                if ( i != 0 ) {
-                    approxMsgRatePerSecond = i;
+        boolean configFromEnv = false;
+        String configFile = System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE;
+        for ( String arg : args ) {
+            if ( arg.contentEquals( SolaceConsumer.ARG_CONFIG_FROM_ENV ) ) {
+                configFromEnv = true;
+                SolacePublisher.getPublisherPropertiesFromEnv(properties);
+            } else if ( arg.startsWith( SolaceConsumer.ARG_PROPERTIES_FILE ) && arg.length() > SolaceConsumer.ARG_PROPERTIES_FILE.length() ) {
+                configFile = arg.substring(SolaceConsumer.ARG_PROPERTIES_FILE.length() +1);
+            } else {
+                Integer i = 0;
+                try {
+                    i = Integer.valueOf(arg);
+                    if ( i < 0 || i > 1000 ) {
+                        logger.warn( "The input argument (published msgs/second) was out of bounds; using default" );
+                        i = 0;
+                    }
+                } catch ( NumberFormatException nfe ) {
+                    logger.warn(nfe.getMessage());
+                    logger.warn( "Could not convert unknown input argument [{}] to an integer value, using default", arg );
+                } finally {
+                    if ( i != 0 ) {
+                        approxMsgRatePerSecond = i;
+                    }
                 }
             }
         }
 
-        final Properties properties = new Properties();
-        try {
-            properties.load(new FileInputStream(System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE));
-        } catch (FileNotFoundException fnfexc) {
-            logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
-            logger.warn("attempting to read config resource from class loader");
+        if ( !configFromEnv ) {
             try {
-                properties.load(SolacePublisher.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
-            } catch (NullPointerException npexc) {
-                logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
-                System.exit(-1);
+                String propertiesFile = configFile;
+                logger.info( "Attempting to read properties from: {}", propertiesFile );
+                properties.load(new FileInputStream(propertiesFile));
+            } catch (FileNotFoundException fnfexc) {
+                logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
+                logger.warn("attempting to read config resource from class loader");
+                try {
+                    properties.load(SolacePublisher.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+                } catch (NullPointerException npexc) {
+                    logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
+                    System.exit(-1);
+                }
+            } catch (IOException ioexc) {
+                logger.error( "IOException reading properties file: {}", ioexc.getMessage());
+                System.exit(-2);
+            } catch (Exception exc) {
+                logger.error( "Error reading properties file: {}", exc.getMessage() );
+                System.exit(-3);
             }
-        } catch (IOException ioexc) {
-            logger.error( "IOException reading properties file: {}", ioexc.getMessage());
-            System.exit(-2);
-        } catch (Exception exc) {
-            logger.error( "Error reading properties file: {}", exc.getMessage() );
-            System.exit(-3);
         }
 
         final String useRandomKeyString = properties.getProperty("use.random.key", "false");
@@ -142,11 +155,11 @@ public class SolacePublisherBlocking {
         
         ScheduledExecutorService statsPrintingThread = Executors.newSingleThreadScheduledExecutor();
         statsPrintingThread.scheduleAtFixedRate(() -> {
-            System.out.printf("%s %s Published msgs/s: %,d%n",API,SAMPLE_NAME,msgSentCounter);  // simple way of calculating message rates
+            logger.info("{} {} Published msgs/s: {}", API, SIMPLE_NAME, ( msgSentCounter / 5 ) );
             msgSentCounter = 0;
         }, 1, 1, TimeUnit.SECONDS);
         
-        System.out.println(API + " " + SAMPLE_NAME + " connected, and running. Press [ENTER] to quit.");
+        System.out.println(API + " " + SIMPLE_NAME + " connected, and running. Press [ENTER] to quit.");
         System.out.println("Publishing to topic '"+ TOPIC_PREFIX + API.toLowerCase() + 
                 "/pers/pub/...', please ensure queue has matching subscription."); 
         byte[] payload = new byte[PAYLOAD_SIZE];  // preallocate memory, for reuse, for performance
@@ -191,12 +204,12 @@ public class SolacePublisherBlocking {
                     // send the message
                     publisher.publishAwaitAcknowledgement(message,Topic.of(topicString),2000L);  // wait up to 2 seconds?
                     msgSentCounter++;  // add one
-                    logger.info("OrderId='{}' sequence='{}' location='{}' topic='{}'", orderNumber, msgSentCounter, locationCode, topicString);
+                    logger.debug("OrderId='{}' sequence='{}' location='{}' topic='{}'", orderNumber, msgSentCounter, locationCode, topicString);
                 } catch (PubSubPlusClientException e) {  // could be different types
                     logger.warn(String.format("NACK for Message %s - %s", message, e));
                 } catch (InterruptedException e) {
                     // got interrupted by someone while waiting for my publish confirm?
-                    logger.info("Got interrupted, probably shutting down",e);
+                    logger.warn("Got interrupted, probably shutting down",e);
                 }
             } catch (RuntimeException e) {  // threw from send(), only thing that is throwing here, but keep trying (unless shutdown?)
                 logger.warn("### Caught while trying to publisher.publish()",e);

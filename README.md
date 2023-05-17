@@ -10,7 +10,7 @@ KEDA is a Kubernetes operator that can be used to monitor external metrics and s
 
 Scaling itself is actually done by the Kubernetes Horizontal Pod Autoscaler (HPA). KEDA provides a mechanism whereby resource specific metrics can be utilized for scaling decisions instead of the inherent CPU and Memory utilization that is available to HPA by default.
 
-> **Note:** There should never by an HPA scaler defined for a deployment if using KEDA. KEDA configures HPA to use the identified metrics. Using both mechanisms concurrently will produce unpredictable results.
+> **Note:** There should never be an HPA scaler defined for a deployment if using KEDA. KEDA configures HPA to use the identified metrics. Using both mechanisms concurrently will produce unpredictable results.
 
 ## Metrics and Scalers
 KEDA provides the ability to monitor metrics from external systems and make run-time scaling decisions based upon those metrics. The ability to monitor specific kinds of resources (Solace PubSub+, Rabbit MQ, Amazon SQS, etc.) is provided by KEDA **scalers** contributed by the open-source community. [KEDA Scalers](https://keda.sh/docs/2.10/scalers/) Whatever metrics are sensible for a particular scaler can be defined by the community, as well as the mechanism for identifying the endpoint and providing the necessary credentials.
@@ -162,7 +162,7 @@ After updating configuration as specified above, deploy to Kubernetes and observ
     ```
 - Observe the application scale up to consume the backlog, then reduce to a number of replicas necessary for steady consumption.
 
-### Solace Consumer
+### 2. Solace Consumer
 
 Create the solace consumer deployment using ```crd/solace-consumer.yaml```. This will create a simple deployment, initially with 1 pod. The image must be visible to the Kubernetes cluster.
 
@@ -196,6 +196,6 @@ kubectl delete -f crd/consumer-secret.yaml
 
 kubectl delete -f crd/secret-auth.yaml
 
-## If you're so included:
+## If you're so inclined:
 helm uninstall -n keda keda
 ```

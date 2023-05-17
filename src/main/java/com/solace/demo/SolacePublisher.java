@@ -59,49 +59,62 @@ public class SolacePublisher {
     private static final int DEFAULT_NUMBER_OF_KEYS = 20;
     private static volatile int numberOfOrders = DEFAULT_NUMBER_OF_KEYS;
     
-    private static final Logger logger = LogManager.getLogger( SIMPLE_NAME );  // log4j2, but could also use SLF4J, JCL, etc.
+    private static final Logger logger = LogManager.getLogger( SolacePublisher.class );  // log4j2, but could also use SLF4J, JCL, etc.
 
     /** Main method. */
     public static void main(String... args) throws IOException, InterruptedException {
 
         // Look for arg[0] and interpret as numeric msg/sec rate of publication
+        final Properties properties = new Properties();
         int approxMsgRatePerSecond = APPROX_MSG_RATE_PER_SEC;
-        if (args.length > 0) {
-            Integer i = 0;
-            try {
-                i = Integer.valueOf(args[0]);
-                if ( i < 0 || i > 1000 ) {
-                    logger.warn( "The input argument (published msgs/second) was out of bounds; using default" );
-                    i = 0;
-                }
-            } catch ( NumberFormatException nfe ) {
-                logger.warn(nfe.getMessage());
-                logger.warn( "Could not convert input argument to an integer value, using default" );
-            } finally {
-                if ( i != 0 ) {
-                    approxMsgRatePerSecond = i;
+        boolean configFromEnv = false;
+        String configFile = System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE;
+        for ( String arg : args ) {
+            if ( arg.contentEquals( SolaceConsumer.ARG_CONFIG_FROM_ENV ) ) {
+                configFromEnv = true;
+                getPublisherPropertiesFromEnv(properties);
+            } else if ( arg.startsWith( SolaceConsumer.ARG_PROPERTIES_FILE ) && arg.length() > SolaceConsumer.ARG_PROPERTIES_FILE.length() ) {
+                configFile = arg.substring(SolaceConsumer.ARG_PROPERTIES_FILE.length() +1);
+            } else {
+                Integer i = 0;
+                try {
+                    i = Integer.valueOf(arg);
+                    if ( i < 0 || i > 1000 ) {
+                        logger.warn( "The input argument (published msgs/second) was out of bounds; using default" );
+                        i = 0;
+                    }
+                } catch ( NumberFormatException nfe ) {
+                    logger.warn(nfe.getMessage());
+                    logger.warn( "Could not convert unknown input argument [{}] to an integer value, using default", arg );
+                } finally {
+                    if ( i != 0 ) {
+                        approxMsgRatePerSecond = i;
+                    }
                 }
             }
         }
 
-        final Properties properties = new Properties();
-        try {
-            properties.load(new FileInputStream(System.getProperty("user.dir") + "/config/" + PROPERTIES_FILE));
-        } catch (FileNotFoundException fnfexc) {
-            logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
-            logger.warn("attempting to read config resource from class loader");
+        if ( !configFromEnv ) {
             try {
-                properties.load(SolacePublisher.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
-            } catch (NullPointerException npexc) {
-                logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
-                System.exit(-1);
+                String propertiesFile = configFile;
+                logger.info( "Attempting to read properties from: {}", propertiesFile );
+                properties.load(new FileInputStream(propertiesFile));
+            } catch (FileNotFoundException fnfexc) {
+                logger.warn("File not found exception reading properties file: {}", fnfexc.getMessage());
+                logger.warn("attempting to read config resource from class loader");
+                try {
+                    properties.load(SolacePublisher.class.getClassLoader().getResourceAsStream(PROPERTIES_FILE));
+                } catch (NullPointerException npexc) {
+                    logger.error("error reading properties file: {}; {}", PROPERTIES_FILE, npexc.getMessage());
+                    System.exit(-1);
+                }
+            } catch (IOException ioexc) {
+                logger.error( "IOException reading properties file: {}", ioexc.getMessage());
+                System.exit(-2);
+            } catch (Exception exc) {
+                logger.error( "Error reading properties file: {}", exc.getMessage() );
+                System.exit(-3);
             }
-        } catch (IOException ioexc) {
-            logger.error( "IOException reading properties file: {}", ioexc.getMessage());
-            System.exit(-2);
-        } catch (Exception exc) {
-            logger.error( "Error reading properties file: {}", exc.getMessage() );
-            System.exit(-3);
         }
 
         final String useRandomKeyString = properties.getProperty("use.random.key", "false");
@@ -156,14 +169,14 @@ public class SolacePublisher {
         
         ScheduledExecutorService statsPrintingThread = Executors.newSingleThreadScheduledExecutor();
         statsPrintingThread.scheduleAtFixedRate(() -> {
-            System.out.printf("%s %s Published msgs/s: %,d%n",API,SIMPLE_NAME,msgSentCounter);  // simple way of calculating message rates
+            logger.info("{} {} Published msgs/s: {}", API, SIMPLE_NAME, ( msgSentCounter / 5 ) );
             msgSentCounter = 0;
-        }, 1, 1, TimeUnit.SECONDS);
+        }, 1, 5, TimeUnit.SECONDS);
 
         System.out.println(API + " " + SIMPLE_NAME + " connected, and running. Press [ENTER] to quit.");
         System.out.println("Publishing to topic '"+ TOPIC_PREFIX + API.toLowerCase() + 
                 "/pers/pub/...', please ensure queue has matching subscription."); 
-        byte[] payload = new byte[PAYLOAD_SIZE];  // preallocate memory, for reuse, for performance
+        byte[] payload = new byte[PAYLOAD_SIZE];  // allocate memory, for reuse, for performance
 
         // loop the main thread, waiting for a quit signal
 
@@ -201,7 +214,7 @@ public class SolacePublisher {
                 publisher.publish(message,Topic.of(topicString));  // send the message
                 msgSentCounter++;  // add one
 
-                logger.info("OrderId='{}' sequence='{}' location='{}' topic='{}'", orderNumber, msgSentCounter, locationCode, topicString);
+                logger.debug("OrderId='{}' sequence='{}' location='{}' topic='{}'", orderNumber, msgSentCounter, locationCode, topicString);
             } catch (RuntimeException e) {  // threw from publish(), only thing that is throwing here, but keep trying (unless shutdown?)
                 logger.warn("### Caught while trying to publisher.publish()",e);
                 isShutdown = true;  // just example, maybe look to see if recoverable
@@ -242,5 +255,40 @@ public class SolacePublisher {
     public static String getRandomOrderNumber() {
         Integer orderNumber = ( ( int )Math.floor( Math.random() * numberOfOrders ) ) + 1;
         return String.format( "%12d", orderNumber );
+    }
+
+    public static void getPublisherPropertiesFromEnv( Properties properties ) {
+        String host                 = System.getenv( "SOLACE_HOST" );
+        String vpn_name             = System.getenv( "SOLACE_MSGVPN_NAME" );
+        String username             = System.getenv( "SOLACE_MSG_USER" );
+        String password             = System.getenv( "SOLACE_MSG_PASSWORD" );
+        String reconnects           = System.getenv( "RECONNECTION_ATTEMPTS" );
+        String retries              = System.getenv( "RETRIES_PER_HOST" );
+        String topicPrefix          = System.getenv( "TOPIC_PREFIX" );
+        String useRandomKey         = System.getenv( "USE_RANDOM_KEY" );
+        String uniqueKeys           = System.getenv( "NUMBER_OF_UNIQUE_KEYS" );
+
+        properties.put( "solace.messaging.transport.host",
+                                                            ( host != null          ? host          : "localhost" ) );
+        properties.put( "solace.messaging.service.vpn-name",
+                                                            ( vpn_name != null      ? vpn_name      : "default" ) );
+        properties.put( "solace.messaging.authentication.basic.username",
+                                                            ( username != null      ? username      : "client1" ) );
+        properties.put( "solace.messaging.authentication.basic.password",
+                                                            ( password != null      ? password      : "client1pass" ) );
+        properties.put( "solace.messaging.transport.reconnection-attempts",
+                                                            ( reconnects != null    ? reconnects    : "20" ) );
+        properties.put( "solace.messaging.transport.connection.retries-per-host",
+                                                            ( retries != null       ? retries       : "5" ) );
+        properties.put( "topic.prefix",                 ( topicPrefix != null   ? topicPrefix   : "pqdemo" ) );
+        properties.put( "use.random.key",               ( useRandomKey != null  ? useRandomKey  : "false" ) );
+        properties.put( "number.of.unique.keys",        ( uniqueKeys != null    ? uniqueKeys    : "20" ) );
+//        try {
+//            properties.put( "sub_ack_window_size",  ( window_sz != null     ? Integer.parseInt(window_sz) : 100 ) );
+//        } catch ( NumberFormatException nfexc ) {
+//            logger.warn( nfexc.getMessage() );
+//            logger.warn( nfexc.getStackTrace() );
+//        }
+        return;
     }
 }
